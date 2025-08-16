@@ -159,10 +159,15 @@ def test_mpv_socket():
     
     # Detect system type
     is_raspberry_pi = False
+    rpi_model = "unknown"
     try:
         with open('/proc/cpuinfo', 'r') as f:
             cpuinfo = f.read().lower()
             is_raspberry_pi = 'raspberry pi' in cpuinfo or 'bcm' in cpuinfo
+            if 'pi zero' in cpuinfo:
+                rpi_model = 'zero'
+            elif 'raspberry pi' in cpuinfo:
+                rpi_model = 'standard'
     except:
         pass
     
@@ -173,13 +178,43 @@ def test_mpv_socket():
     ]
     
     if is_raspberry_pi:
-        print("Configuring for Raspberry Pi...")
-        mpv_cmd.extend([
-            '--ao=alsa,pulse,',
-            '--audio-device=auto',
-            '--audio-samplerate=44100',
-            '--audio-format=s16'
-        ])
+        print(f"Configuring for Raspberry Pi ({rpi_model})...")
+        
+        # Check available audio devices first
+        audio_devices = ""
+        try:
+            result = subprocess.run(['aplay', '-l'], capture_output=True, text=True, timeout=3)
+            if result.returncode == 0:
+                audio_devices = result.stdout.lower()
+                print(f"Available audio devices:\n{result.stdout}")
+        except:
+            pass
+        
+        # Use specific Raspberry Pi audio configuration
+        if 'headphones' in audio_devices or 'bcm2835' in audio_devices:
+            print("Found built-in audio, using ALSA hw:1,0")
+            mpv_cmd.extend([
+                '--ao=alsa',
+                '--audio-device=alsa/hw:1,0',
+                '--audio-samplerate=44100',
+                '--audio-format=s16le'
+            ])
+        elif 'usb' in audio_devices:
+            print("Found USB audio device")
+            mpv_cmd.extend([
+                '--ao=alsa',
+                '--audio-device=alsa/hw:2,0',
+                '--audio-samplerate=44100',
+                '--audio-format=s16le'
+            ])
+        else:
+            print("Using ALSA auto-detection")
+            mpv_cmd.extend([
+                '--ao=alsa,pulse,',
+                '--audio-device=auto',
+                '--audio-samplerate=44100',
+                '--audio-format=s16le'
+            ])
     else:
         mpv_cmd.extend([
             '--ao=pulse,alsa,',

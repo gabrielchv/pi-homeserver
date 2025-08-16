@@ -37,27 +37,217 @@ playback_state = {
 }
 autoplay_enabled = True  # Toggle for automatic next track
 mpv_process = None  # Track MPV process
+mpv_start_lock = threading.Lock()  # Prevent concurrent MPV starts
 
 
 def start_mpv():
     """Start MPV with socket interface"""
     global mpv_process
-    try:
-        # Kill any existing MPV processes to avoid conflicts
-        for proc in psutil.process_iter(['pid', 'name']):
-            if proc.info['name'] == 'mpv':
-                proc.kill()
+    
+    # Prevent concurrent MPV starts
+    with mpv_start_lock:
+        try:
+            # Kill any existing MPV processes to avoid conflicts
+            killed_processes = []
+            for proc in psutil.process_iter(['pid', 'name']):
+                if proc.info['name'] == 'mpv':
+                    try:
+                        proc.kill()
+                        killed_processes.append(proc.pid)
+                    except:
+                        pass
+            
+            if killed_processes:
+                app.logger.info(f"Killed existing MPV processes: {killed_processes}")
+                time.sleep(0.5)  # Give processes time to die
+            
+            # Remove existing socket file if it exists
+            if os.path.exists(MPV_SOCKET):
+                os.remove(MPV_SOCKET)
         
-        # Remove existing socket file if it exists
-        if os.path.exists(MPV_SOCKET):
-            os.remove(MPV_SOCKET)
+            # Detect system type
+            is_raspberry_pi = False
+            rpi_model = None
+            try:
+                with open('/proc/cpuinfo', 'r') as f:
+                    cpuinfo = f.read().lower()
+                    is_raspberry_pi = 'raspberry pi' in cpuinfo or 'bcm' in cpuinfo
+                    if 'pi zero' in cpuinfo:
+                        rpi_model = 'zero'
+                    elif 'raspberry pi' in cpuinfo:
+                        rpi_model = 'standard'
+            except:
+                pass
+            
+            # Build MPV command with appropriate audio settings
+            mpv_cmd = [
+                'mpv',
+                '--no-video',
+                '--idle=yes',
+                f'--input-ipc-server={MPV_SOCKET}',
+                '--volume=50',
+                '--no-terminal'
+            ]
+            
+            # Configure audio based on system type
+            if is_raspberry_pi:
+                app.logger.info(f"Detected Raspberry Pi ({rpi_model}), configuring audio...")
+                
+                # Check available audio devices first
+                audio_devices = []
+                try:
+                    result = subprocess.run(['aplay', '-l'], capture_output=True, text=True, timeout=3)
+                    if result.returncode == 0:
+                        audio_devices = result.stdout.lower()
+                except:
+                    pass
+                
+                # Raspberry Pi specific audio configuration
+                if 'headphones' in audio_devices or 'bcm2835' in audio_devices:
+                    # Pi has built-in audio (3.5mm jack)
+                    app.logger.info("Found built-in audio, using ALSA hw:1,0 (headphones)")
+                    mpv_cmd.extend([
+                        '--ao=alsa',
+                        '--audio-device=alsa/hw:1,0',  # RPi headphone jack
+                        '--audio-samplerate=44100',
+                        '--audio-format=s16le',
+                        '--audio-channels=stereo'
+                    ])
+                elif 'usb' in audio_devices:
+                    # USB audio device detected
+                    app.logger.info("Found USB audio device")
+                    mpv_cmd.extend([
+                        '--ao=alsa',
+                        '--audio-device=alsa/hw:2,0',  # Typical USB audio
+                        '--audio-samplerate=44100',
+                        '--audio-format=s16le'
+                    ])
+                elif 'hdmi' in audio_devices:
+                    # Only HDMI audio available
+                    app.logger.info("Only HDMI audio found, using hw:0,0")
+                    mpv_cmd.extend([
+                        '--ao=alsa',
+                        '--audio-device=alsa/hw:0,0',  # HDMI
+                        '--audio-format=s16le'
+                    ])
+                else:
+                    # Fallback: try generic ALSA with device auto-detection
+                    app.logger.info("No specific audio devices found, using ALSA auto-detection")
+                    mpv_cmd.extend([
+                        '--ao=alsa,pulse,',
+                        '--audio-device=auto',
+                        '--audio-samplerate=44100',
+                        '--audio-format=s16le'
+                    ])
+            else:
+                # Desktop/non-RPi system
+                # Detect audio system and configure accordingly
+                has_pipewire = False
+                has_pulse = False
+                try:
+                    # Check for PipeWire
+                    result = subprocess.run(['pactl', 'info'], capture_output=True, text=True, timeout=2)
+                    if result.returncode == 0 and 'pipewire' in result.stdout.lower():
+                        has_pipewire = True
+                    elif result.returncode == 0:
+                        has_pulse = True
+                except:
+                    pass
+                
+                if has_pipewire:
+                    app.logger.info("Detected PipeWire audio system...")
+                    mpv_cmd.extend([
+                        '--ao=pipewire,pulse,alsa,',
+                        '--audio-device=auto'
+                    ])
+                elif has_pulse:
+                    app.logger.info("Detected PulseAudio system...")
+                    mpv_cmd.extend([
+                        '--ao=pulse,alsa,',
+                        '--audio-device=auto'
+                    ])
+                else:
+                    app.logger.info("Using default audio configuration...")
+                    mpv_cmd.extend([
+                        '--ao=pulse,alsa,',
+                        '--audio-device=auto'
+                    ])
+            
+            app.logger.info(f"Starting MPV with command: {' '.join(mpv_cmd)}")
+            
+            # Start MPV - suppress both stdout and stderr for stability
+            mpv_process = subprocess.Popen(
+                mpv_cmd,
+                stdout=subprocess.DEVNULL, 
+                stderr=subprocess.DEVNULL
+            )
+            
+            # Wait for socket to be created with better error detection
+            socket_created = False
+            for i in range(30):  # Wait up to 3 seconds in 0.1s increments
+                time.sleep(0.1)
+                
+                # Check if process died early
+                if mpv_process.poll() is not None:
+                    exit_code = mpv_process.poll()
+                    app.logger.error(f"MPV process died immediately with exit code: {exit_code}")
+                    
+                    # Try to provide more specific error messages
+                    if exit_code == 1:
+                        app.logger.error("MPV failed - likely audio configuration issue")
+                    elif exit_code == -9:
+                        app.logger.error("MPV was killed - possible resource constraint")
+                    else:
+                        app.logger.error(f"MPV failed with unexpected exit code: {exit_code}")
+                    
+                    # Run diagnostics to help troubleshoot
+                    run_audio_diagnostics()
+                    raise Exception(f"MPV process died immediately (exit code: {exit_code})")
+                
+                # Check if socket was created
+                if os.path.exists(MPV_SOCKET):
+                    socket_created = True
+                    break
+            
+            if not socket_created:
+                app.logger.error("MPV socket was not created within timeout period")
+                run_audio_diagnostics()
+                raise Exception(f"MPV socket {MPV_SOCKET} was not created")
+            
+            app.logger.info(f"MPV started successfully with PID {mpv_process.pid}")
+            
+            # Test basic MPV communication
+            try:
+                test_result = mpv_get('idle-active')
+                app.logger.info(f"MPV communication test successful, idle-active: {test_result}")
+            except Exception as e:
+                app.logger.warning(f"MPV communication test failed: {e}")
+            
+            return True
+            
+        except Exception as e:
+            app.logger.error(f"Failed to start MPV: {e}")
+            
+            # Cleanup failed process
+            if mpv_process and mpv_process.poll() is None:
+                mpv_process.terminate()
+                time.sleep(0.5)
+                if mpv_process.poll() is None:
+                    mpv_process.kill()
+            
+            return False
         
-        # Check if we're on a Raspberry Pi or ARM system
+        # Detect system type
         is_raspberry_pi = False
+        rpi_model = None
         try:
             with open('/proc/cpuinfo', 'r') as f:
                 cpuinfo = f.read().lower()
                 is_raspberry_pi = 'raspberry pi' in cpuinfo or 'bcm' in cpuinfo
+                if 'pi zero' in cpuinfo:
+                    rpi_model = 'zero'
+                elif 'raspberry pi' in cpuinfo:
+                    rpi_model = 'standard'
         except:
             pass
         
@@ -67,74 +257,133 @@ def start_mpv():
             '--no-video',
             '--idle=yes',
             f'--input-ipc-server={MPV_SOCKET}',
-            '--volume=50'
+            '--volume=50',
+            '--no-terminal'
         ]
         
-        # Detect audio system and configure accordingly
-        has_pipewire = False
-        has_pulse = False
-        try:
-            # Check for PipeWire
-            result = subprocess.run(['pactl', 'info'], capture_output=True, text=True, timeout=2)
-            if result.returncode == 0 and 'pipewire' in result.stdout.lower():
-                has_pipewire = True
-            elif result.returncode == 0:
-                has_pulse = True
-        except:
-            pass
-        
+        # Configure audio based on system type
         if is_raspberry_pi:
-            app.logger.info("Detected Raspberry Pi, configuring ALSA-first audio settings...")
-            mpv_cmd.extend([
-                '--ao=alsa,pulse,pipewire,',  # ALSA first for RPi
-                '--audio-device=auto',
-                '--audio-samplerate=44100',
-                '--audio-format=s16',
-            ])
-        elif has_pipewire:
-            app.logger.info("Detected PipeWire audio system...")
-            mpv_cmd.extend([
-                '--ao=pipewire,pulse,alsa,',  # PipeWire first
-                '--audio-device=auto'
-            ])
-        elif has_pulse:
-            app.logger.info("Detected PulseAudio system...")
-            mpv_cmd.extend([
-                '--ao=pulse,alsa,',  # PulseAudio first
-                '--audio-device=auto'
-            ])
+            app.logger.info(f"Detected Raspberry Pi ({rpi_model}), configuring audio...")
+            
+            # Check available audio devices first
+            audio_devices = []
+            try:
+                result = subprocess.run(['aplay', '-l'], capture_output=True, text=True, timeout=3)
+                if result.returncode == 0:
+                    audio_devices = result.stdout.lower()
+            except:
+                pass
+            
+            # Raspberry Pi specific audio configuration
+            if 'headphones' in audio_devices or 'bcm2835' in audio_devices:
+                # Pi has built-in audio (3.5mm jack)
+                app.logger.info("Found built-in audio, using ALSA hw:1,0 (headphones)")
+                mpv_cmd.extend([
+                    '--ao=alsa',
+                    '--audio-device=alsa/hw:1,0',  # RPi headphone jack
+                    '--audio-samplerate=44100',
+                    '--audio-format=s16le',
+                    '--audio-channels=stereo'
+                ])
+            elif 'usb' in audio_devices:
+                # USB audio device detected
+                app.logger.info("Found USB audio device")
+                mpv_cmd.extend([
+                    '--ao=alsa',
+                    '--audio-device=alsa/hw:2,0',  # Typical USB audio
+                    '--audio-samplerate=44100',
+                    '--audio-format=s16le'
+                ])
+            elif 'hdmi' in audio_devices:
+                # Only HDMI audio available
+                app.logger.info("Only HDMI audio found, using hw:0,0")
+                mpv_cmd.extend([
+                    '--ao=alsa',
+                    '--audio-device=alsa/hw:0,0',  # HDMI
+                    '--audio-format=s16le'
+                ])
+            else:
+                # Fallback: try generic ALSA with device auto-detection
+                app.logger.info("No specific audio devices found, using ALSA auto-detection")
+                mpv_cmd.extend([
+                    '--ao=alsa,pulse,',
+                    '--audio-device=auto',
+                    '--audio-samplerate=44100',
+                    '--audio-format=s16le'
+                ])
         else:
-            app.logger.info("Using default audio configuration...")
-            mpv_cmd.extend([
-                '--ao=pulse,alsa,pipewire,',  # Try all
-                '--audio-device=auto'
-            ])
-        
-        # Add terminal settings - still suppress stdout but capture stderr for debugging
-        mpv_cmd.extend(['--no-terminal', '--msg-level=all=info'])
+            # Desktop/non-RPi system
+            # Detect audio system and configure accordingly
+            has_pipewire = False
+            has_pulse = False
+            try:
+                # Check for PipeWire
+                result = subprocess.run(['pactl', 'info'], capture_output=True, text=True, timeout=2)
+                if result.returncode == 0 and 'pipewire' in result.stdout.lower():
+                    has_pipewire = True
+                elif result.returncode == 0:
+                    has_pulse = True
+            except:
+                pass
+            
+            if has_pipewire:
+                app.logger.info("Detected PipeWire audio system...")
+                mpv_cmd.extend([
+                    '--ao=pipewire,pulse,alsa,',
+                    '--audio-device=auto'
+                ])
+            elif has_pulse:
+                app.logger.info("Detected PulseAudio system...")
+                mpv_cmd.extend([
+                    '--ao=pulse,alsa,',
+                    '--audio-device=auto'
+                ])
+            else:
+                app.logger.info("Using default audio configuration...")
+                mpv_cmd.extend([
+                    '--ao=pulse,alsa,',
+                    '--audio-device=auto'
+                ])
         
         app.logger.info(f"Starting MPV with command: {' '.join(mpv_cmd)}")
         
-        # Start MPV - suppress both stdout and stderr initially for stability
+        # Start MPV - suppress both stdout and stderr for stability
         mpv_process = subprocess.Popen(
             mpv_cmd,
             stdout=subprocess.DEVNULL, 
             stderr=subprocess.DEVNULL
         )
         
-        # Wait a moment for socket to be created, but also check for early failures
-        for i in range(10):  # Wait up to 1 second in 0.1s increments
+        # Wait for socket to be created with better error detection
+        socket_created = False
+        for i in range(30):  # Wait up to 3 seconds in 0.1s increments
             time.sleep(0.1)
             
             # Check if process died early
             if mpv_process.poll() is not None:
-                raise Exception(f"MPV process died immediately (exit code: {mpv_process.poll()})")
+                exit_code = mpv_process.poll()
+                app.logger.error(f"MPV process died immediately with exit code: {exit_code}")
+                
+                # Try to provide more specific error messages
+                if exit_code == 1:
+                    app.logger.error("MPV failed - likely audio configuration issue")
+                elif exit_code == -9:
+                    app.logger.error("MPV was killed - possible resource constraint")
+                else:
+                    app.logger.error(f"MPV failed with unexpected exit code: {exit_code}")
+                
+                # Run diagnostics to help troubleshoot
+                run_audio_diagnostics()
+                raise Exception(f"MPV process died immediately (exit code: {exit_code})")
             
             # Check if socket was created
             if os.path.exists(MPV_SOCKET):
+                socket_created = True
                 break
         
-        if not os.path.exists(MPV_SOCKET):
+        if not socket_created:
+            app.logger.error("MPV socket was not created within timeout period")
+            run_audio_diagnostics()
             raise Exception(f"MPV socket {MPV_SOCKET} was not created")
         
         app.logger.info(f"MPV started successfully with PID {mpv_process.pid}")
@@ -151,42 +400,6 @@ def start_mpv():
     except Exception as e:
         app.logger.error(f"Failed to start MPV: {e}")
         
-        # Additional diagnostics
-        app.logger.info("Running MPV diagnostics...")
-        
-        # Check if MPV is installed
-        try:
-            result = subprocess.run(['mpv', '--version'], capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                app.logger.info(f"MPV version: {result.stdout.split('mpv')[1].split('(')[0].strip()}")
-            else:
-                app.logger.error(f"MPV version check failed: {result.stderr}")
-        except Exception as ve:
-            app.logger.error(f"MPV not found or not executable: {ve}")
-        
-        # Check audio devices
-        try:
-            # Try to list ALSA devices
-            result = subprocess.run(['aplay', '-l'], capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                app.logger.info(f"ALSA devices:\n{result.stdout}")
-            else:
-                app.logger.warning("No ALSA devices found or aplay not available")
-        except:
-            pass
-        
-        # Check if audio groups are accessible
-        try:
-            import grp, pwd
-            username = pwd.getpwuid(os.getuid()).pw_name
-            user_groups = [g.gr_name for g in grp.getgrall() if username in g.gr_mem]
-            audio_groups = [g for g in user_groups if 'audio' in g.lower()]
-            app.logger.info(f"User {username} audio groups: {audio_groups}")
-            if not audio_groups:
-                app.logger.warning("User not in audio group - this may cause audio issues")
-        except:
-            pass
-        
         # Cleanup failed process
         if mpv_process and mpv_process.poll() is None:
             mpv_process.terminate()
@@ -195,6 +408,97 @@ def start_mpv():
                 mpv_process.kill()
         
         return False
+
+
+def run_audio_diagnostics():
+    """Run comprehensive audio diagnostics to help troubleshoot issues"""
+    app.logger.info("=== AUDIO DIAGNOSTICS ===")
+    
+    # Check if MPV is installed and working
+    try:
+        result = subprocess.run(['mpv', '--version'], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            version_line = result.stdout.split('\n')[0]
+            app.logger.info(f"MPV version: {version_line}")
+        else:
+            app.logger.error(f"MPV version check failed: {result.stderr}")
+    except Exception as e:
+        app.logger.error(f"MPV not found or not executable: {e}")
+    
+    # Check available audio devices
+    try:
+        result = subprocess.run(['aplay', '-l'], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            app.logger.info(f"ALSA playback devices:\n{result.stdout}")
+        else:
+            app.logger.warning("No ALSA devices found or aplay not available")
+    except Exception as e:
+        app.logger.warning(f"Could not run aplay: {e}")
+    
+    # Check MPV audio output options
+    try:
+        result = subprocess.run(['mpv', '--ao=help'], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            app.logger.info(f"MPV audio outputs:\n{result.stdout}")
+    except Exception as e:
+        app.logger.warning(f"Could not get MPV audio outputs: {e}")
+    
+    # Check user audio group membership
+    try:
+        import grp, pwd
+        username = pwd.getpwuid(os.getuid()).pw_name
+        user_groups = [g.gr_name for g in grp.getgrall() if username in g.gr_mem]
+        audio_groups = [g for g in user_groups if 'audio' in g.lower()]
+        app.logger.info(f"User {username} audio groups: {audio_groups}")
+        if not audio_groups:
+            app.logger.warning("User not in audio group - run: sudo usermod -a -G audio $USER")
+    except Exception as e:
+        app.logger.warning(f"Could not check user groups: {e}")
+    
+    # Check if audio system is working with a simple test
+    try:
+        # Test if we can at least access an audio device
+        result = subprocess.run(['aplay', '--duration=1', '--quiet', '/dev/zero'], 
+                              capture_output=True, timeout=3)
+        if result.returncode == 0:
+            app.logger.info("Basic audio test passed")
+        else:
+            app.logger.warning(f"Basic audio test failed: {result.stderr}")
+    except Exception as e:
+        app.logger.warning(f"Could not run basic audio test: {e}")
+    
+    app.logger.info("=== END DIAGNOSTICS ===")
+
+
+def test_mpv_audio_manually():
+    """Test MPV audio configuration manually to help with troubleshooting"""
+    app.logger.info("Testing MPV audio configuration manually...")
+    
+    # Try different audio configurations
+    test_configs = [
+        ['mpv', '--no-video', '--ao=alsa', '--audio-device=alsa/hw:1,0', '/dev/zero'],
+        ['mpv', '--no-video', '--ao=alsa', '--audio-device=alsa/hw:0,0', '/dev/zero'],
+        ['mpv', '--no-video', '--ao=alsa', '--audio-device=auto', '/dev/zero'],
+        ['mpv', '--no-video', '--ao=pulse', '/dev/zero'],
+        ['mpv', '--no-video', '--ao=pipewire', '/dev/zero']
+    ]
+    
+    for i, cmd in enumerate(test_configs):
+        try:
+            app.logger.info(f"Testing config {i+1}: {' '.join(cmd[:-1])}")
+            result = subprocess.run(cmd, capture_output=True, timeout=3)
+            if result.returncode == 0:
+                app.logger.info(f"✓ Config {i+1} worked!")
+                return cmd[:-1]  # Return working config without /dev/zero
+            else:
+                app.logger.warning(f"✗ Config {i+1} failed: {result.stderr.decode()}")
+        except subprocess.TimeoutExpired:
+            app.logger.warning(f"✗ Config {i+1} timed out")
+        except Exception as e:
+            app.logger.warning(f"✗ Config {i+1} error: {e}")
+    
+    app.logger.error("No working MPV audio configuration found")
+    return None
 
 
 def ensure_mpv_running():
@@ -703,6 +1007,38 @@ def debug_queue():
         'autoplay_enabled': autoplay_enabled
     }
     return jsonify(debug_info)
+
+
+@app.get('/debug-audio')
+def debug_audio():
+    """Debug endpoint to run audio diagnostics"""
+    run_audio_diagnostics()
+    
+    # Try to restart MPV with diagnostics
+    success = start_mpv()
+    
+    return jsonify({
+        'mpv_restart_successful': success,
+        'message': 'Audio diagnostics completed. Check server logs for details.'
+    })
+
+
+@app.post('/test-audio-config')
+def test_audio_config():
+    """Test different MPV audio configurations to find one that works"""
+    working_config = test_mpv_audio_manually()
+    
+    if working_config:
+        return jsonify({
+            'success': True,
+            'working_config': ' '.join(working_config),
+            'message': 'Found working audio configuration. Check logs for details.'
+        })
+    else:
+        return jsonify({
+            'success': False,
+            'message': 'No working audio configuration found. Check logs for details.'
+        })
 
 
 def submission_worker():

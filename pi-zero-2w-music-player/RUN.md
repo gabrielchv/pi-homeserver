@@ -124,5 +124,20 @@ Open your browser to `http://localhost:5000`
 ## Debug Endpoints
 
 - `GET /debug-queue` - Shows MPV status, queue state, and playback information
+- `GET /debug-audio` - Runs comprehensive audio diagnostics and attempts to restart MPV
+- `POST /test-audio-config` - Tests different MPV audio configurations to find one that works
 - Browser console shows HTMX request/response details and WebSocket events
-- `forceRefreshQueue()` - Browser console function to manually refresh queue with proper HTMX binding 
+- `forceRefreshQueue()` - Browser console function to manually refresh queue with proper HTMX binding
+
+### Audio Troubleshooting Commands
+
+```bash
+# Run the diagnostic script
+python3 test_mpv.py
+
+# Check audio diagnostics via web API
+curl http://localhost:5000/debug-audio
+
+# Test different audio configurations
+curl -X POST http://localhost:5000/test-audio-config
+``` 
