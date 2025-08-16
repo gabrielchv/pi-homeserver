@@ -1,0 +1,15 @@
+# Git ignore file for Pi Zero 2W Music Player
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.mp3
+*.wav
+*.flac
+*.m4a
+*.so
+.env
+.venv
+*.sock
+cookies.txt
