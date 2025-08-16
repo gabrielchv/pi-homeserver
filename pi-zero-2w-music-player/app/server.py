@@ -70,20 +70,43 @@ def start_mpv():
             '--volume=50'
         ]
         
-        # Add audio configuration for Raspberry Pi
+        # Detect audio system and configure accordingly
+        has_pipewire = False
+        has_pulse = False
+        try:
+            # Check for PipeWire
+            result = subprocess.run(['pactl', 'info'], capture_output=True, text=True, timeout=2)
+            if result.returncode == 0 and 'pipewire' in result.stdout.lower():
+                has_pipewire = True
+            elif result.returncode == 0:
+                has_pulse = True
+        except:
+            pass
+        
         if is_raspberry_pi:
-            app.logger.info("Detected Raspberry Pi, configuring audio settings...")
-            # Try ALSA first, then pulse
+            app.logger.info("Detected Raspberry Pi, configuring ALSA-first audio settings...")
             mpv_cmd.extend([
-                '--ao=alsa,pulse,',  # Audio output preference
-                '--audio-device=auto',  # Auto-detect audio device
-                '--audio-samplerate=44100',  # Common sample rate
-                '--audio-format=s16',  # 16-bit signed format
+                '--ao=alsa,pulse,pipewire,',  # ALSA first for RPi
+                '--audio-device=auto',
+                '--audio-samplerate=44100',
+                '--audio-format=s16',
+            ])
+        elif has_pipewire:
+            app.logger.info("Detected PipeWire audio system...")
+            mpv_cmd.extend([
+                '--ao=pipewire,pulse,alsa,',  # PipeWire first
+                '--audio-device=auto'
+            ])
+        elif has_pulse:
+            app.logger.info("Detected PulseAudio system...")
+            mpv_cmd.extend([
+                '--ao=pulse,alsa,',  # PulseAudio first
+                '--audio-device=auto'
             ])
         else:
-            # For desktop systems, prefer pulse then alsa
+            app.logger.info("Using default audio configuration...")
             mpv_cmd.extend([
-                '--ao=pulse,alsa,',
+                '--ao=pulse,alsa,pipewire,',  # Try all
                 '--audio-device=auto'
             ])
         
@@ -92,12 +115,11 @@ def start_mpv():
         
         app.logger.info(f"Starting MPV with command: {' '.join(mpv_cmd)}")
         
-        # Start MPV - capture stderr for debugging but suppress stdout
+        # Start MPV - suppress both stdout and stderr initially for stability
         mpv_process = subprocess.Popen(
             mpv_cmd,
             stdout=subprocess.DEVNULL, 
-            stderr=subprocess.PIPE,  # Capture stderr for debugging
-            text=True
+            stderr=subprocess.DEVNULL
         )
         
         # Wait a moment for socket to be created, but also check for early failures
@@ -106,32 +128,14 @@ def start_mpv():
             
             # Check if process died early
             if mpv_process.poll() is not None:
-                # Process died, get error output
-                stderr_output = ""
-                try:
-                    stderr_output = mpv_process.stderr.read() if mpv_process.stderr else ""
-                except:
-                    pass
-                raise Exception(f"MPV process died immediately (exit code: {mpv_process.poll()}). Error output: {stderr_output}")
+                raise Exception(f"MPV process died immediately (exit code: {mpv_process.poll()})")
             
             # Check if socket was created
             if os.path.exists(MPV_SOCKET):
                 break
         
         if not os.path.exists(MPV_SOCKET):
-            # Get any error output before failing
-            stderr_output = ""
-            try:
-                if mpv_process.stderr:
-                    # Use select to check if there's data available
-                    import select
-                    ready, _, _ = select.select([mpv_process.stderr], [], [], 0.1)
-                    if ready:
-                        stderr_output = mpv_process.stderr.read()
-            except:
-                pass
-            
-            raise Exception(f"MPV socket {MPV_SOCKET} was not created. MPV error output: {stderr_output}")
+            raise Exception(f"MPV socket {MPV_SOCKET} was not created")
         
         app.logger.info(f"MPV started successfully with PID {mpv_process.pid}")
         
