@@ -52,27 +52,144 @@ def start_mpv():
         if os.path.exists(MPV_SOCKET):
             os.remove(MPV_SOCKET)
         
-        # Start MPV with socket interface
-        mpv_process = subprocess.Popen([
+        # Check if we're on a Raspberry Pi or ARM system
+        is_raspberry_pi = False
+        try:
+            with open('/proc/cpuinfo', 'r') as f:
+                cpuinfo = f.read().lower()
+                is_raspberry_pi = 'raspberry pi' in cpuinfo or 'bcm' in cpuinfo
+        except:
+            pass
+        
+        # Build MPV command with appropriate audio settings
+        mpv_cmd = [
             'mpv',
             '--no-video',
             '--idle=yes',
             f'--input-ipc-server={MPV_SOCKET}',
-            '--no-terminal',
             '--volume=50'
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        ]
         
-        # Wait a moment for socket to be created
-        time.sleep(1)
+        # Add audio configuration for Raspberry Pi
+        if is_raspberry_pi:
+            app.logger.info("Detected Raspberry Pi, configuring audio settings...")
+            # Try ALSA first, then pulse
+            mpv_cmd.extend([
+                '--ao=alsa,pulse,',  # Audio output preference
+                '--audio-device=auto',  # Auto-detect audio device
+                '--audio-samplerate=44100',  # Common sample rate
+                '--audio-format=s16',  # 16-bit signed format
+            ])
+        else:
+            # For desktop systems, prefer pulse then alsa
+            mpv_cmd.extend([
+                '--ao=pulse,alsa,',
+                '--audio-device=auto'
+            ])
+        
+        # Add terminal settings - still suppress stdout but capture stderr for debugging
+        mpv_cmd.extend(['--no-terminal', '--msg-level=all=info'])
+        
+        app.logger.info(f"Starting MPV with command: {' '.join(mpv_cmd)}")
+        
+        # Start MPV - capture stderr for debugging but suppress stdout
+        mpv_process = subprocess.Popen(
+            mpv_cmd,
+            stdout=subprocess.DEVNULL, 
+            stderr=subprocess.PIPE,  # Capture stderr for debugging
+            text=True
+        )
+        
+        # Wait a moment for socket to be created, but also check for early failures
+        for i in range(10):  # Wait up to 1 second in 0.1s increments
+            time.sleep(0.1)
+            
+            # Check if process died early
+            if mpv_process.poll() is not None:
+                # Process died, get error output
+                stderr_output = ""
+                try:
+                    stderr_output = mpv_process.stderr.read() if mpv_process.stderr else ""
+                except:
+                    pass
+                raise Exception(f"MPV process died immediately (exit code: {mpv_process.poll()}). Error output: {stderr_output}")
+            
+            # Check if socket was created
+            if os.path.exists(MPV_SOCKET):
+                break
         
         if not os.path.exists(MPV_SOCKET):
-            raise Exception(f"MPV socket {MPV_SOCKET} was not created")
+            # Get any error output before failing
+            stderr_output = ""
+            try:
+                if mpv_process.stderr:
+                    # Use select to check if there's data available
+                    import select
+                    ready, _, _ = select.select([mpv_process.stderr], [], [], 0.1)
+                    if ready:
+                        stderr_output = mpv_process.stderr.read()
+            except:
+                pass
+            
+            raise Exception(f"MPV socket {MPV_SOCKET} was not created. MPV error output: {stderr_output}")
         
         app.logger.info(f"MPV started successfully with PID {mpv_process.pid}")
+        
+        # Test basic MPV communication
+        try:
+            test_result = mpv_get('idle-active')
+            app.logger.info(f"MPV communication test successful, idle-active: {test_result}")
+        except Exception as e:
+            app.logger.warning(f"MPV communication test failed: {e}")
+        
         return True
         
     except Exception as e:
         app.logger.error(f"Failed to start MPV: {e}")
+        
+        # Additional diagnostics
+        app.logger.info("Running MPV diagnostics...")
+        
+        # Check if MPV is installed
+        try:
+            result = subprocess.run(['mpv', '--version'], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                app.logger.info(f"MPV version: {result.stdout.split('mpv')[1].split('(')[0].strip()}")
+            else:
+                app.logger.error(f"MPV version check failed: {result.stderr}")
+        except Exception as ve:
+            app.logger.error(f"MPV not found or not executable: {ve}")
+        
+        # Check audio devices
+        try:
+            # Try to list ALSA devices
+            result = subprocess.run(['aplay', '-l'], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                app.logger.info(f"ALSA devices:\n{result.stdout}")
+            else:
+                app.logger.warning("No ALSA devices found or aplay not available")
+        except:
+            pass
+        
+        # Check if audio groups are accessible
+        try:
+            import grp, pwd
+            username = pwd.getpwuid(os.getuid()).pw_name
+            user_groups = [g.gr_name for g in grp.getgrall() if username in g.gr_mem]
+            audio_groups = [g for g in user_groups if 'audio' in g.lower()]
+            app.logger.info(f"User {username} audio groups: {audio_groups}")
+            if not audio_groups:
+                app.logger.warning("User not in audio group - this may cause audio issues")
+        except:
+            pass
+        
+        # Cleanup failed process
+        if mpv_process and mpv_process.poll() is None:
+            mpv_process.terminate()
+            time.sleep(0.5)
+            if mpv_process.poll() is None:
+                mpv_process.kill()
+        
         return False
 
 
