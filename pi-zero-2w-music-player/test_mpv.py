@@ -199,12 +199,12 @@ def test_mpv_socket():
                 '--audio-samplerate=44100',
                 '--audio-format=s16le'
             ])
-        elif 'usb' in audio_devices:
-            print("Found USB audio device")
+        elif 'usb' in audio_devices or 'cs202' in audio_devices:
+            print("Found USB audio device (CS202)")
             mpv_cmd.extend([
                 '--ao=alsa',
-                '--audio-device=alsa/hw:2,0',
-                '--audio-samplerate=44100',
+                '--audio-device=alsa/hw:0,0',  # CS202 is on card 0
+                '--audio-samplerate=48000',    # CS202 supports 48kHz
                 '--audio-format=s16le'
             ])
         else:

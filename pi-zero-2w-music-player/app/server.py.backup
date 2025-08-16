@@ -290,8 +290,8 @@ def start_mpv():
                 app.logger.info("Found USB audio device")
                 mpv_cmd.extend([
                     '--ao=alsa',
-                    '--audio-device=alsa/hw:0,0',  # USB audio (CS202 on card 0)
-                    '--audio-samplerate=48000',    # CS202 supports 48kHz
+                    '--audio-device=alsa/hw:2,0',  # Typical USB audio
+                    '--audio-samplerate=44100',
                     '--audio-format=s16le'
                 ])
             elif 'hdmi' in audio_devices:
@@ -398,16 +398,16 @@ def start_mpv():
             return True
             
         except Exception as e:
-        app.logger.error(f"Failed to start MPV: {e}")
-        
-        # Cleanup failed process
-        if mpv_process and mpv_process.poll() is None:
-            mpv_process.terminate()
-            time.sleep(0.5)
-            if mpv_process.poll() is None:
-                mpv_process.kill()
-        
-        return False
+            app.logger.error(f"Failed to start MPV: {e}")
+            
+            # Cleanup failed process
+            if mpv_process and mpv_process.poll() is None:
+                mpv_process.terminate()
+                time.sleep(0.5)
+                if mpv_process.poll() is None:
+                    mpv_process.kill()
+            
+            return False
 
 
 def run_audio_diagnostics():
