@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pi Zero 2W Music Player</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <style>
+    .htmx-indicator { display: none; }
+    .htmx-request .htmx-indicator { display: inline; }
+    .htmx-request.htmx-indicator { display: inline; }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+  <div class="max-w-4xl mx-auto p-4 space-y-4">
+    <header class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+      <h1 class="text-2xl font-bold">YouTube Music Player</h1>
+      <div class="text-sm opacity-70">mpv socket: /tmp/mpv.sock</div>
+    </header>
+
+    <section class="bg-slate-800/60 rounded-xl p-4">
+      <form class="flex flex-col sm:flex-row gap-2" hx-post="/submit" hx-target="#queue" hx-swap="beforeend">
+        <input name="url" type="url" required placeholder="Paste YouTube URL..." class="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 focus:outline-none focus:ring focus:ring-sky-600" />
+        <button type="submit" class="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 whitespace-nowrap">Add</button>
+      </form>
+    </section>
+
+    <section class="bg-slate-800/60 rounded-xl p-4 space-y-3">
+      <div class="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+        <div class="flex flex-wrap gap-2">
+          <button class="px-3 py-2 rounded bg-slate-700 hover:bg-slate-600" hx-post="/control" hx-vals='{"action":"playpause"}'>Play/Pause</button>
+          <button class="px-3 py-2 rounded bg-slate-700 hover:bg-sky-600" hx-post="/control" hx-vals='{"action":"stop"}'>Stop</button>
+          <button class="px-3 py-2 rounded bg-slate-700 hover:bg-slate-600" hx-post="/control" hx-vals='{"action":"skip"}'>Skip</button>
+        </div>
+        <div class="flex items-center gap-3">
+          <button id="autoplayToggle" class="px-3 py-2 rounded bg-slate-700 hover:bg-slate-600 text-sm" 
+                  hx-post="/toggle-autoplay" 
+                  hx-swap="none"
+                  hx-trigger="click">
+            Autoplay: <span id="autoplayStatus">ON</span>
+          </button>
+        </div>
+        <div class="flex items-center gap-2 w-full sm:w-auto">
+          <span class="text-sm opacity-70 whitespace-nowrap">Vol</span>
+          <input id="volume" name="volume" type="range" min="0" max="100" value="50" class="flex-1 sm:w-40 min-w-0"
+                 hx-post="/volume" hx-trigger="change throttle:200ms" />
+        </div>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <div id="currentMeta" class="flex items-center gap-3 min-w-0 flex-1">
+          <img id="currentThumb" src="" alt="thumb" class="w-14 h-14 rounded object-cover hidden flex-shrink-0" />
+          <div class="min-w-0 flex-1">
+            <div id="currentTitle" class="truncate font-medium">Nothing playing</div>
+            <div id="currentTime" class="text-sm opacity-70">0:00 / 0:00</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <input id="progress" name="position" type="range" min="0" max="100" value="0" class="w-full min-w-0"
+               hx-post="/seek" hx-trigger="change" />
+      </div>
+    </section>
+
+    <section class="bg-slate-800/60 rounded-xl p-4">
+      <h2 class="font-semibold mb-3">Queue</h2>
+      <div class="flex flex-wrap gap-2 mb-3">
+        <button class="px-3 py-1 rounded bg-red-600 hover:bg-red-500 text-sm" 
+                hx-post="/clear-queue" 
+                hx-confirm="Clear entire queue?">Clear Queue</button>
+        <button class="px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 text-sm" 
+                hx-post="/shuffle-queue">Shuffle</button>
+      </div>
+      <div id="queue" class="space-y-2" hx-swap="innerHTML">
+        {% include 'queue.html' %}
+      </div>
+    </section>
+  </div>
+
+  <!-- Error Modal -->
+  <div id="error-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50">
+    <div class="bg-slate-800 rounded-xl p-6 max-w-md mx-4 border border-slate-700">
+      <div class="flex items-center gap-3 mb-4">
+        <div class="w-8 h-8 bg-red-600 rounded-full flex items-center justify-center flex-shrink-0">
+          <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"></path>
+          </svg>
+        </div>
+        <h3 class="text-lg font-semibold">YouTube Processing Failed</h3>
+      </div>
+      <div class="text-slate-300 mb-4">
+        <p class="mb-2">The YouTube URL could not be processed. This usually happens when YouTube changes their authentication requirements.</p>
+        <div class="text-sm opacity-75 space-y-1">
+          <p><strong>To fix this:</strong></p>
+          <ol class="list-decimal list-inside space-y-1 ml-2">
+            <li>Export fresh cookies from your browser while logged into YouTube</li>
+            <li>Update the <code class="bg-slate-900 px-1 rounded">cookies.txt</code> file in the Google Cloud Function</li>
+            <li>Redeploy the function or wait for it to reload</li>
+            <li>Try the URL again</li>
+          </ol>
+        </div>
+      </div>
+      <div class="flex gap-2 justify-end">
+        <button id="close-modal" class="px-4 py-2 rounded bg-slate-700 hover:bg-slate-600 transition-colors">
+          Close
+        </button>
+        <button id="retry-url" class="px-4 py-2 rounded bg-sky-600 hover:bg-sky-500 transition-colors">
+          Retry
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const socket = io();
+    
+    // Global variables for queue management
+    let queueItems = []; // Store queue items locally for JavaScript access
+    let lastFailedUrl = ''; // Store the last failed URL for retry
+
+    // Initialize autoplay status
+    document.addEventListener('DOMContentLoaded', async function() {
+      try {
+        const response = await fetch('/autoplay-status');
+        const data = await response.json();
+        updateAutoplayStatus(data.enabled);
+      } catch (e) {
+        console.error('Failed to get autoplay status:', e);
+      }
+    });
+
+    function updateAutoplayStatus(enabled) {
+      const statusEl = document.getElementById('autoplayStatus');
+      const buttonEl = document.getElementById('autoplayToggle');
+      if (statusEl) statusEl.textContent = enabled ? 'ON' : 'OFF';
+      if (buttonEl) {
+        buttonEl.className = `px-3 py-2 rounded text-sm ${enabled ? 'bg-sky-600 hover:bg-sky-500' : 'bg-slate-700 hover:bg-slate-600'}`;
+      }
+    }
+
+    // Disable buttons during HTMX requests to prevent double-clicks
+    document.body.addEventListener('htmx:beforeRequest', function(evt) {
+      if (evt.target.tagName === 'BUTTON' && !evt.target.hasAttribute('disabled')) {
+        evt.target.dataset.wasEnabled = 'true';
+        evt.target.disabled = true;
+      }
+    });
+
+    // Handle HTMX responses
+    document.body.addEventListener('htmx:afterRequest', function(evt) {
+      // Re-enable buttons that were enabled before the request
+      if (evt.target.tagName === 'BUTTON' && evt.target.dataset.wasEnabled === 'true') {
+        evt.target.disabled = false;
+        delete evt.target.dataset.wasEnabled;
+      }
+
+      if (evt.detail.xhr.responseURL && evt.detail.xhr.responseURL.includes('/submit')) {
+        if (evt.detail.xhr.status === 200) {
+          // Clear the URL input after successful submission
+          const urlInput = document.querySelector('input[name="url"]');
+          if (urlInput) urlInput.value = '';
+          
+          // Process any new content in the queue
+          const queue = document.getElementById('queue');
+          if (queue) {
+            htmx.process(queue);
+            console.log('HTMX processed new queue item');
+          }
+        }
+      }
+      
+      // Handle queue action responses
+      const queueActions = ['/play-now', '/remove-item', '/move-up', '/move-down'];
+      if (queueActions.some(action => evt.detail.xhr.responseURL && evt.detail.xhr.responseURL.includes(action))) {
+        if (evt.detail.xhr.status !== 200) {
+          console.error('Queue action failed:', evt.detail.xhr.status, evt.detail.xhr.responseText);
+          // Show error notification (optional)
+          const errorMsg = evt.detail.xhr.status === 404 ? 'Item not found' : 'Action failed';
+          console.warn(errorMsg);
+        }
+      }
+    });
+
+    // Handle HTMX errors
+    document.body.addEventListener('htmx:responseError', function(evt) {
+      console.error('HTMX request failed:', evt.detail);
+      // Re-enable buttons on error
+      if (evt.target.tagName === 'BUTTON' && evt.target.dataset.wasEnabled === 'true') {
+        evt.target.disabled = false;
+        delete evt.target.dataset.wasEnabled;
+      }
+    });
+
+    function secondsToTimestamp(sec) {
+      sec = Math.max(0, Math.floor(sec || 0));
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      return `${m}:${s.toString().padStart(2, '0')}`;
+    }
+
+    function refreshQueue() {
+      fetch('/queue')
+        .then(response => response.text())
+        .then(html => {
+          const queue = document.getElementById('queue');
+          if (queue) {
+            queue.innerHTML = html;
+            // Process the new content with HTMX
+            htmx.process(queue);
+            console.log('Queue refreshed and HTMX processed');
+          }
+        })
+        .catch(error => {
+          console.error('Failed to refresh queue:', error);
+        });
+    }
+
+    // Debug functions - can be called from browser console
+    window.forceRefreshQueue = refreshQueue;
+    window.testCookiesModal = () => showErrorModal('https://www.youtube.com/watch?v=test');
+
+    // Modal functions
+    function showErrorModal(url) {
+      lastFailedUrl = url;
+      const modal = document.getElementById('error-modal');
+      if (modal) {
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+      }
+    }
+
+    function hideErrorModal() {
+      const modal = document.getElementById('error-modal');
+      if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+      }
+    }
+
+    // Modal event listeners
+    document.getElementById('close-modal').addEventListener('click', hideErrorModal);
+    
+    document.getElementById('retry-url').addEventListener('click', function() {
+      hideErrorModal();
+      if (lastFailedUrl) {
+        const urlInput = document.querySelector('input[name="url"]');
+        if (urlInput) {
+          urlInput.value = lastFailedUrl;
+          // Trigger form submission
+          const form = urlInput.closest('form');
+          if (form) {
+            htmx.trigger(form, 'submit');
+          }
+        }
+      }
+    });
+
+    // Close modal when clicking outside
+    document.getElementById('error-modal').addEventListener('click', function(e) {
+      if (e.target === this) {
+        hideErrorModal();
+      }
+    });
+
+    // Close modal with Escape key
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') {
+        const modal = document.getElementById('error-modal');
+        if (modal && !modal.classList.contains('hidden')) {
+          hideErrorModal();
+        }
+      }
+    });
+
+    socket.on('autoplay_toggled', (payload) => {
+      updateAutoplayStatus(payload.enabled);
+    });
+
+    socket.on('show_cookies_modal', (payload) => {
+      console.log('Received show_cookies_modal event:', payload);
+      showErrorModal(payload.url);
+    });
+
+    socket.on('queue_update', (payload) => {
+      const item = payload.item;
+      const id = item.id;
+      const root = document.getElementById(`queue-item-${id}`);
+      if (!root) return;
+
+      console.log(`Queue update for ${id}: status=${item.status}, has_details=${!!item.details}`);
+
+      const statusEl = document.getElementById(`status-${id}`);
+      if (statusEl) statusEl.textContent = item.status === 'ready' ? 'Ready' : (item.status || 'Loading');
+
+      if (item.details) {
+        const titleEl = document.getElementById(`title-${id}`);
+        const thumbEl = document.getElementById(`thumb-${id}`);
+        const srcEl = document.getElementById(`source-${id}`);
+        if (titleEl) titleEl.textContent = item.details.title || 'Unknown';
+        if (thumbEl && item.details.thumbnail) {
+          thumbEl.src = item.details.thumbnail;
+          thumbEl.classList.remove('hidden');
+        }
+        if (srcEl) srcEl.textContent = item.details.source || '';
+        
+        // Force refresh the queue when item becomes ready
+        if (item.status === 'ready') {
+          console.log(`Item ${id} is ready, refreshing queue display`);
+          refreshQueue();
+        }
+      }
+    });
+
+    socket.on('queue_cleared', () => {
+      const queue = document.getElementById('queue');
+      if (queue) {
+        queue.innerHTML = '';
+        // Process the empty queue to remove any remaining HTMX bindings
+        htmx.process(queue);
+      }
+      queueItems = [];
+    });
+
+    socket.on('item_removed', (payload) => {
+      // Small delay to avoid race condition with HTMX request
+      setTimeout(() => {
+        const element = document.getElementById(`queue-item-${payload.id}`);
+        if (element) {
+          element.style.transition = 'opacity 0.3s ease-out';
+          element.style.opacity = '0';
+          setTimeout(() => element.remove(), 300);
+        }
+      }, 100);
+    });
+
+    socket.on('queue_refreshed', (payload) => {
+      // Small delay to avoid race condition with HTMX request
+      setTimeout(() => {
+        // Refresh the entire queue display
+        if (payload.items) {
+          // Update local queue items
+          queueItems = payload.items;
+          // Use the helper function to refresh the queue
+          refreshQueue();
+        }
+      }, 100);
+    });
+
+    socket.on('status', (s) => {
+      const progress = document.getElementById('progress');
+      const volume = document.getElementById('volume');
+      const currentTitle = document.getElementById('currentTitle');
+      const currentThumb = document.getElementById('currentThumb');
+      const currentTime = document.getElementById('currentTime');
+
+      if (typeof s.volume === 'number' && volume) volume.value = s.volume;
+
+      let percent = 0;
+      if (s.duration > 0) percent = Math.max(0, Math.min(100, (s.time / s.duration) * 100));
+      if (progress) progress.value = percent;
+
+      if (s.current && s.current.title) {
+        currentTitle.textContent = s.current.title;
+      } else {
+        currentTitle.textContent = 'Nothing playing';
+      }
+      if (s.current && s.current.thumbnail) {
+        currentThumb.src = s.current.thumbnail;
+        currentThumb.classList.remove('hidden');
+      } else {
+        currentThumb.classList.add('hidden');
+      }
+
+      currentTime.textContent = `${secondsToTimestamp(s.time)} / ${secondsToTimestamp(s.duration)}`;
+    });
+  </script>
+</body>
+</html> 

@@ -1,0 +1,86 @@
+{% for item in queue_items %}
+<div id="queue-item-{{ item.id }}" 
+     class="flex flex-col sm:flex-row items-start sm:items-center gap-3 p-2 rounded border border-slate-700 bg-slate-900/60 hover:bg-slate-800/60 transition-colors"
+     data-item-id="{{ item.id }}"
+     data-item-index="{{ loop.index0 }}">
+  <div class="flex items-center gap-3 flex-1 min-w-0">
+    <div class="flex-shrink-0">
+      {% if item.status == 'loading' %}
+      <div class="w-12 h-12 rounded bg-slate-700 animate-pulse flex items-center justify-center">
+        <div class="w-6 h-6 border-2 border-slate-400 border-t-transparent rounded-full animate-spin"></div>
+      </div>
+      {% else %}
+      <img id="thumb-{{ item.id }}" 
+           src="{{ (item.details.thumbnail if item.details) or '' }}" 
+           alt="thumb" 
+           class="w-12 h-12 rounded object-cover {{ 'hidden' if not (item.details and item.details.thumbnail) }}" />
+      {% endif %}
+    </div>
+    <div class="min-w-0 flex-1">
+      <div id="title-{{ item.id }}" class="truncate font-medium">
+        {% if item.status == 'loading' %}
+        <div class="h-4 bg-slate-700 rounded animate-pulse"></div>
+        {% elif item.details and item.details.title %}
+        {{ item.details.title }}
+        {% else %}
+        Unknown
+        {% endif %}
+      </div>
+      <div class="text-xs opacity-70">
+        {% if item.status == 'loading' %}
+        <div class="h-3 bg-slate-700 rounded animate-pulse w-20 mt-1"></div>
+        {% else %}
+        <span id="status-{{ item.id }}">{{ item.status }}</span>
+        {% if item.details and item.details.source %}
+        • <span id="source-{{ item.id }}">{{ item.details.source }}</span>
+        {% else %}
+        • <span id="source-{{ item.id }}"></span>
+        {% endif %}
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="flex gap-1 flex-shrink-0 w-full sm:w-auto justify-end sm:justify-start">
+    {% if item.status == 'ready' or item.status == 'Ready' %}
+    <button class="px-2 py-1 rounded bg-sky-600 hover:bg-sky-500 text-xs whitespace-nowrap"
+            hx-post="/play-now" 
+            hx-vals='{"id":"{{ item.id }}"}'
+            hx-swap="none"
+            hx-indicator="#play-indicator-{{ item.id }}">
+      <span id="play-indicator-{{ item.id }}" class="htmx-indicator">⏳</span>
+      Play Now
+    </button>
+    {% endif %}
+    <button class="px-2 py-1 rounded bg-red-600 hover:bg-red-500 text-xs whitespace-nowrap {{ 'opacity-50 cursor-not-allowed' if item.status == 'loading' }}"
+            hx-post="/remove-item" 
+            hx-vals='{"id":"{{ item.id }}"}'
+            hx-confirm="Remove this item?"
+            hx-swap="none"
+            hx-indicator="#remove-indicator-{{ item.id }}"
+            {{ 'disabled' if item.status == 'loading' }}>
+      <span id="remove-indicator-{{ item.id }}" class="htmx-indicator">⏳</span>
+      Remove
+    </button>
+  </div>
+  <div class="flex flex-col gap-1 flex-shrink-0">
+    <button class="px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-xs whitespace-nowrap {{ 'opacity-50 cursor-not-allowed' if loop.index0 == 0 or queue_items|length <= 1 or item.status == 'loading' }}"
+            hx-post="/move-up" 
+            hx-vals='{"id":"{{ item.id }}"}'
+            hx-swap="none"
+            hx-indicator="#up-indicator-{{ item.id }}"
+            {{ 'disabled' if loop.index0 == 0 or queue_items|length <= 1 or item.status == 'loading' }}>
+      <span id="up-indicator-{{ item.id }}" class="htmx-indicator">⏳</span>
+      ↑
+    </button>
+    <button class="px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-xs whitespace-nowrap {{ 'opacity-50 cursor-not-allowed' if loop.index0 == queue_items|length - 1 or queue_items|length <= 1 or item.status == 'loading' }}"
+            hx-post="/move-down" 
+            hx-vals='{"id":"{{ item.id }}"}'
+            hx-swap="none"
+            hx-indicator="#down-indicator-{{ item.id }}"
+            {{ 'disabled' if loop.index0 == queue_items|length - 1 or queue_items|length <= 1 or item.status == 'loading' }}>
+      <span id="down-indicator-{{ item.id }}" class="htmx-indicator">⏳</span>
+      ↓
+    </button>
+  </div>
+</div>
+{% endfor %} 
