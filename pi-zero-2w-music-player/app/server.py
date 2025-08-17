@@ -71,11 +71,13 @@ def start_mpv():
             try:
                 with open('/proc/cpuinfo', 'r') as f:
                     cpuinfo = f.read().lower()
-                    is_raspberry_pi = 'raspberry pi' in cpuinfo or 'bcm' in cpuinfo
-                    if 'pi zero' in cpuinfo:
-                        rpi_model = 'zero'
-                    elif 'raspberry pi' in cpuinfo:
-                        rpi_model = 'standard'
+                    # More precise Raspberry Pi detection
+                    is_raspberry_pi = ('raspberry pi' in cpuinfo or 'bcm2835' in cpuinfo or 'bcm2836' in cpuinfo or 'bcm2837' in cpuinfo or 'bcm2711' in cpuinfo) and 'arm' in cpuinfo
+                    if is_raspberry_pi:
+                        if 'pi zero' in cpuinfo:
+                            rpi_model = 'zero'
+                        elif 'raspberry pi' in cpuinfo:
+                            rpi_model = 'standard'
             except:
                 pass
             
@@ -102,43 +104,8 @@ def start_mpv():
                 except:
                     pass
                 
-                # Raspberry Pi specific audio configuration
-                if 'headphones' in audio_devices or 'bcm2835' in audio_devices:
-                    # Pi has built-in audio (3.5mm jack)
-                    app.logger.info("Found built-in audio, using ALSA hw:1,0 (headphones)")
-                    mpv_cmd.extend([
-                        '--ao=alsa',
-                        '--audio-device=alsa/hw:1,0',  # RPi headphone jack
-                        '--audio-samplerate=44100',
-                        '--audio-format=s16le',
-                        '--audio-channels=stereo'
-                    ])
-                elif 'usb' in audio_devices:
-                    # USB audio device detected
-                    app.logger.info("Found USB audio device")
-                    mpv_cmd.extend([
-                        '--ao=alsa',
-                        '--audio-device=alsa/hw:2,0',  # Typical USB audio
-                        '--audio-samplerate=44100',
-                        '--audio-format=s16le'
-                    ])
-                elif 'hdmi' in audio_devices:
-                    # Only HDMI audio available
-                    app.logger.info("Only HDMI audio found, using hw:0,0")
-                    mpv_cmd.extend([
-                        '--ao=alsa',
-                        '--audio-device=alsa/hw:0,0',  # HDMI
-                        '--audio-format=s16le'
-                    ])
-                else:
-                    # Fallback: try generic ALSA with device auto-detection
-                    app.logger.info("No specific audio devices found, using ALSA auto-detection")
-                    mpv_cmd.extend([
-                        '--ao=alsa,pulse,',
-                        '--audio-device=auto',
-                        '--audio-samplerate=44100',
-                        '--audio-format=s16le'
-                    ])
+                # Use automatic audio detection for Raspberry Pi (simpler and more reliable)
+                app.logger.info("Using automatic audio detection for Raspberry Pi")
             else:
                 # Desktop/non-RPi system
                 # Detect audio system and configure accordingly
@@ -236,178 +203,6 @@ def start_mpv():
                     mpv_process.kill()
             
             return False
-        
-        # Detect system type
-        is_raspberry_pi = False
-        rpi_model = None
-        try:
-            with open('/proc/cpuinfo', 'r') as f:
-                cpuinfo = f.read().lower()
-                is_raspberry_pi = 'raspberry pi' in cpuinfo or 'bcm' in cpuinfo
-                if 'pi zero' in cpuinfo:
-                    rpi_model = 'zero'
-                elif 'raspberry pi' in cpuinfo:
-                    rpi_model = 'standard'
-        except:
-            pass
-        
-        # Build MPV command with appropriate audio settings
-        mpv_cmd = [
-            'mpv',
-            '--no-video',
-            '--idle=yes',
-            f'--input-ipc-server={MPV_SOCKET}',
-            '--volume=50',
-            '--no-terminal'
-        ]
-        
-        # Configure audio based on system type
-        if is_raspberry_pi:
-            app.logger.info(f"Detected Raspberry Pi ({rpi_model}), configuring audio...")
-            
-            # Check available audio devices first
-            audio_devices = []
-            try:
-                result = subprocess.run(['aplay', '-l'], capture_output=True, text=True, timeout=3)
-                if result.returncode == 0:
-                    audio_devices = result.stdout.lower()
-            except:
-                pass
-            
-            # Raspberry Pi specific audio configuration
-            if 'headphones' in audio_devices or 'bcm2835' in audio_devices:
-                # Pi has built-in audio (3.5mm jack)
-                app.logger.info("Found built-in audio, using ALSA hw:1,0 (headphones)")
-                mpv_cmd.extend([
-                    '--ao=alsa',
-                    '--audio-device=alsa/hw:1,0',  # RPi headphone jack
-                    '--audio-samplerate=44100',
-                    '--audio-format=s16le',
-                    '--audio-channels=stereo'
-                ])
-            elif 'usb' in audio_devices:
-                # USB audio device detected
-                app.logger.info("Found USB audio device")
-                mpv_cmd.extend([
-                    '--ao=alsa',
-                    '--audio-device=alsa/hw:0,0',  # USB audio (CS202 on card 0)
-                    '--audio-samplerate=48000',    # CS202 supports 48kHz
-                    '--audio-format=s16le'
-                ])
-            elif 'hdmi' in audio_devices:
-                # Only HDMI audio available
-                app.logger.info("Only HDMI audio found, using hw:0,0")
-                mpv_cmd.extend([
-                    '--ao=alsa',
-                    '--audio-device=alsa/hw:0,0',  # HDMI
-                    '--audio-format=s16le'
-                ])
-            else:
-                # Fallback: try generic ALSA with device auto-detection
-                app.logger.info("No specific audio devices found, using ALSA auto-detection")
-                mpv_cmd.extend([
-                    '--ao=alsa,pulse,',
-                    '--audio-device=auto',
-                    '--audio-samplerate=44100',
-                    '--audio-format=s16le'
-                ])
-        else:
-            # Desktop/non-RPi system
-            # Detect audio system and configure accordingly
-            has_pipewire = False
-            has_pulse = False
-            try:
-                # Check for PipeWire
-                result = subprocess.run(['pactl', 'info'], capture_output=True, text=True, timeout=2)
-                if result.returncode == 0 and 'pipewire' in result.stdout.lower():
-                    has_pipewire = True
-                elif result.returncode == 0:
-                    has_pulse = True
-            except:
-                pass
-            
-            if has_pipewire:
-                app.logger.info("Detected PipeWire audio system...")
-                mpv_cmd.extend([
-                    '--ao=pipewire,pulse,alsa,',
-                    '--audio-device=auto'
-                ])
-            elif has_pulse:
-                app.logger.info("Detected PulseAudio system...")
-                mpv_cmd.extend([
-                    '--ao=pulse,alsa,',
-                    '--audio-device=auto'
-                ])
-            else:
-                app.logger.info("Using default audio configuration...")
-                mpv_cmd.extend([
-                    '--ao=pulse,alsa,',
-                    '--audio-device=auto'
-                ])
-        
-        app.logger.info(f"Starting MPV with command: {' '.join(mpv_cmd)}")
-        
-        # Start MPV - suppress both stdout and stderr for stability
-        mpv_process = subprocess.Popen(
-            mpv_cmd,
-            stdout=subprocess.DEVNULL, 
-            stderr=subprocess.DEVNULL
-        )
-        
-        # Wait for socket to be created with better error detection
-        socket_created = False
-        for i in range(30):  # Wait up to 3 seconds in 0.1s increments
-            time.sleep(0.1)
-            
-            # Check if process died early
-            if mpv_process.poll() is not None:
-                exit_code = mpv_process.poll()
-                app.logger.error(f"MPV process died immediately with exit code: {exit_code}")
-                
-                # Try to provide more specific error messages
-                if exit_code == 1:
-                    app.logger.error("MPV failed - likely audio configuration issue")
-                elif exit_code == -9:
-                    app.logger.error("MPV was killed - possible resource constraint")
-                else:
-                    app.logger.error(f"MPV failed with unexpected exit code: {exit_code}")
-                
-                # Run diagnostics to help troubleshoot
-                run_audio_diagnostics()
-                raise Exception(f"MPV process died immediately (exit code: {exit_code})")
-            
-            # Check if socket was created
-            if os.path.exists(MPV_SOCKET):
-                socket_created = True
-                break
-        
-        if not socket_created:
-            app.logger.error("MPV socket was not created within timeout period")
-            run_audio_diagnostics()
-            raise Exception(f"MPV socket {MPV_SOCKET} was not created")
-        
-        app.logger.info(f"MPV started successfully with PID {mpv_process.pid}")
-        
-        # Test basic MPV communication
-        try:
-            test_result = mpv_get('idle-active')
-            app.logger.info(f"MPV communication test successful, idle-active: {test_result}")
-        except Exception as e:
-            app.logger.warning(f"MPV communication test failed: {e}")
-        
-            return True
-            
-        except Exception as e:
-        app.logger.error(f"Failed to start MPV: {e}")
-        
-        # Cleanup failed process
-        if mpv_process and mpv_process.poll() is None:
-            mpv_process.terminate()
-            time.sleep(0.5)
-            if mpv_process.poll() is None:
-                mpv_process.kill()
-        
-        return False
 
 
 def run_audio_diagnostics():

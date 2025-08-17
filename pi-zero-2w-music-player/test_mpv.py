@@ -20,7 +20,8 @@ def check_system_info():
     try:
         with open('/proc/cpuinfo', 'r') as f:
             cpuinfo = f.read().lower()
-            is_raspberry_pi = 'raspberry pi' in cpuinfo or 'bcm' in cpuinfo
+            # More precise Raspberry Pi detection
+            is_raspberry_pi = ('raspberry pi' in cpuinfo or 'bcm2835' in cpuinfo or 'bcm2836' in cpuinfo or 'bcm2837' in cpuinfo or 'bcm2711' in cpuinfo) and 'arm' in cpuinfo
         print(f"Raspberry Pi detected: {is_raspberry_pi}")
     except Exception as e:
         print(f"Could not read /proc/cpuinfo: {e}")
@@ -163,11 +164,13 @@ def test_mpv_socket():
     try:
         with open('/proc/cpuinfo', 'r') as f:
             cpuinfo = f.read().lower()
-            is_raspberry_pi = 'raspberry pi' in cpuinfo or 'bcm' in cpuinfo
-            if 'pi zero' in cpuinfo:
-                rpi_model = 'zero'
-            elif 'raspberry pi' in cpuinfo:
-                rpi_model = 'standard'
+            # More precise Raspberry Pi detection
+            is_raspberry_pi = ('raspberry pi' in cpuinfo or 'bcm2835' in cpuinfo or 'bcm2836' in cpuinfo or 'bcm2837' in cpuinfo or 'bcm2711' in cpuinfo) and 'arm' in cpuinfo
+            if is_raspberry_pi:
+                if 'pi zero' in cpuinfo:
+                    rpi_model = 'zero'
+                elif 'raspberry pi' in cpuinfo:
+                    rpi_model = 'standard'
     except:
         pass
     
@@ -190,36 +193,40 @@ def test_mpv_socket():
         except:
             pass
         
-        # Use specific Raspberry Pi audio configuration
-        if 'headphones' in audio_devices or 'bcm2835' in audio_devices:
-            print("Found built-in audio, using ALSA hw:1,0")
+        # Since basic MPV test works, use automatic detection (no specific audio config)
+        print("Using automatic audio detection (same as basic test that works)")
+    else:
+        # Desktop/non-RPi system - detect audio system
+        has_pipewire = False
+        has_pulse = False
+        try:
+            # Check for PipeWire
+            result = subprocess.run(['pactl', 'info'], capture_output=True, text=True, timeout=2)
+            if result.returncode == 0 and 'pipewire' in result.stdout.lower():
+                has_pipewire = True
+            elif result.returncode == 0:
+                has_pulse = True
+        except:
+            pass
+        
+        if has_pipewire:
+            print("Detected PipeWire audio system")
             mpv_cmd.extend([
-                '--ao=alsa',
-                '--audio-device=alsa/hw:1,0',
-                '--audio-samplerate=44100',
-                '--audio-format=s16le'
+                '--ao=pipewire,pulse,alsa,',
+                '--audio-device=auto'
             ])
-        elif 'usb' in audio_devices or 'cs202' in audio_devices:
-            print("Found USB audio device (CS202)")
+        elif has_pulse:
+            print("Detected PulseAudio system")
             mpv_cmd.extend([
-                '--ao=alsa',
-                '--audio-device=alsa/hw:0,0',  # CS202 is on card 0
-                '--audio-samplerate=48000',    # CS202 supports 48kHz
-                '--audio-format=s16le'
+                '--ao=pulse,alsa,',
+                '--audio-device=auto'
             ])
         else:
-            print("Using ALSA auto-detection")
+            print("Using default audio configuration")
             mpv_cmd.extend([
-                '--ao=alsa,pulse,',
-                '--audio-device=auto',
-                '--audio-samplerate=44100',
-                '--audio-format=s16le'
+                '--ao=pulse,alsa,',
+                '--audio-device=auto'
             ])
-    else:
-        mpv_cmd.extend([
-            '--ao=pulse,alsa,',
-            '--audio-device=auto'
-        ])
     
     print(f"Starting MPV with: {' '.join(mpv_cmd)}")
     
