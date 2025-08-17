@@ -56,10 +56,38 @@ The app will:
 - Start MPV automatically with socket interface
 - Run the web server on port 5000 
 - Accept YouTube URLs for queueing and playback
+- Provide real-time search functionality for finding music
 
 ### 6. Access the Interface
 
 Open your browser to `http://localhost:5000`
+
+## Features
+
+### Adding Music
+
+1. **URL Input**: Paste any YouTube URL and click "Add"
+2. **Search**: Type artist name, song title, or any keywords in the search bar
+   - Results appear as you type (minimum 2 characters)
+   - Shows top 5 most relevant results with thumbnails
+   - Click any result to add it to the queue
+   - Search is cached for better performance
+
+### Playback Control
+
+- Play/Pause, Stop, Skip buttons
+- Volume control slider
+- Progress bar for seeking
+- Auto-play toggle for continuous playback
+
+### Queue Management
+
+- Drag and drop to reorder (coming soon)
+- Move items up/down with buttons
+- Remove individual items
+- Play any item immediately
+- Shuffle entire queue
+- Clear all items
 
 ## Troubleshooting
 
@@ -140,4 +168,7 @@ curl http://localhost:5000/debug-audio
 
 # Test different audio configurations
 curl -X POST http://localhost:5000/test-audio-config
+
+# Test search functionality
+python3 test_search.py
 ``` 

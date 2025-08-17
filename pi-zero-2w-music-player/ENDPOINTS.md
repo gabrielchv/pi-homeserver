@@ -8,9 +8,9 @@
 
 **Method**: `POST`
 
-**Description**: Extracts audio stream URL and metadata from YouTube URLs
+**Description**: Extracts audio stream URL and metadata from YouTube URLs, or searches YouTube for music
 
-**Request**:
+#### URL Processing Request:
 ```json
 {
   "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
@@ -28,10 +28,33 @@
 }
 ```
 
+#### Search Request:
+```json
+{
+  "query": "never gonna give you up rick astley"
+}
+```
+
+**Response** (Success - 200):
+```json
+{
+  "results": [
+    {
+      "id": "dQw4w9WgXcQ",
+      "title": "Rick Astley - Never Gonna Give You Up",
+      "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      "thumbnail": "https://img.youtube.com/vi/dQw4w9WgXcQ/mqdefault.jpg",
+      "duration": 213,
+      "uploader": "Rick Astley"
+    }
+  ]
+}
+```
+
 **Response** (Error - 400/500):
 ```json
 {
-  "error": "Failed to process URL."
+  "error": "Failed to process URL." // or "Search failed."
 }
 ```
 
@@ -47,6 +70,10 @@
 - `POST /submit` - Add URL to queue
   - Body: `url=<youtube_url>`
   - Returns: HTML partial for new queue item
+
+- `POST /search` - Search YouTube for music
+  - Body: `{"query": "artist song name"}`
+  - Returns: `{"results": [...]}`
 
 - `POST /control` - Control playback
   - Body: `action=playpause|stop|skip`

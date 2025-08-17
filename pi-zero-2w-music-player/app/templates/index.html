@@ -20,11 +20,32 @@
       <div class="text-sm opacity-70">mpv socket: /tmp/mpv.sock</div>
     </header>
 
-    <section class="bg-slate-800/60 rounded-xl p-4">
+    <section class="bg-slate-800/60 rounded-xl p-4 space-y-4">
+      <!-- URL Input -->
       <form class="flex flex-col sm:flex-row gap-2" hx-post="/submit" hx-target="#queue" hx-swap="beforeend">
         <input name="url" type="url" required placeholder="Paste YouTube URL..." class="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 focus:outline-none focus:ring focus:ring-sky-600" />
         <button type="submit" class="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 whitespace-nowrap">Add</button>
       </form>
+
+      <!-- Search Input -->
+      <div class="relative">
+        <div class="flex items-center gap-2">
+          <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+          </svg>
+          <input 
+            id="search-input" 
+            type="text" 
+            placeholder="Search for music (artist, song name, etc.)..." 
+            class="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 focus:outline-none focus:ring focus:ring-emerald-600"
+          />
+        </div>
+        
+        <!-- Search Results Dropdown -->
+        <div id="search-results" class="absolute top-full left-0 right-0 mt-1 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 hidden max-h-80 overflow-y-auto">
+          <!-- Results will be populated here -->
+        </div>
+      </div>
     </section>
 
     <section class="bg-slate-800/60 rounded-xl p-4 space-y-3">
@@ -376,6 +397,168 @@
 
       currentTime.textContent = `${secondsToTimestamp(s.time)} / ${secondsToTimestamp(s.duration)}`;
     });
+
+    // Search functionality
+    let searchTimeout = null;
+    let searchCache = new Map();
+    
+    const searchInput = document.getElementById('search-input');
+    const searchResults = document.getElementById('search-results');
+    
+    function debounce(func, wait) {
+      return function executedFunction(...args) {
+        const later = () => {
+          clearTimeout(searchTimeout);
+          func(...args);
+        };
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(later, wait);
+      };
+    }
+    
+    function formatDuration(seconds) {
+      if (!seconds) return '';
+      const mins = Math.floor(seconds / 60);
+      const secs = seconds % 60;
+      return `${mins}:${secs.toString().padStart(2, '0')}`;
+    }
+    
+    function showSearchResults(results) {
+      if (!results || results.length === 0) {
+        searchResults.classList.add('hidden');
+        return;
+      }
+      
+      const resultsHtml = results.map(result => `
+        <div class="p-3 hover:bg-slate-700 border-b border-slate-600 last:border-b-0 cursor-pointer search-result-item"
+             data-url="${result.url}" data-title="${result.title}">
+          <div class="flex items-center gap-3">
+            <img src="${result.thumbnail}" alt="thumbnail" class="w-16 h-12 rounded object-cover flex-shrink-0" loading="lazy" />
+            <div class="flex-1 min-w-0">
+              <div class="font-medium text-sm truncate text-slate-100">${result.title}</div>
+              <div class="text-xs text-slate-400 truncate">${result.uploader || 'Unknown'}</div>
+              ${result.duration ? `<div class="text-xs text-slate-500">${formatDuration(result.duration)}</div>` : ''}
+            </div>
+            <div class="flex-shrink-0">
+              <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+              </svg>
+            </div>
+          </div>
+        </div>
+      `).join('');
+      
+      searchResults.innerHTML = resultsHtml;
+      searchResults.classList.remove('hidden');
+      
+      // Add click handlers
+      searchResults.querySelectorAll('.search-result-item').forEach(item => {
+        item.addEventListener('click', function() {
+          const url = this.dataset.url;
+          const title = this.dataset.title;
+          
+          // Add to queue using the existing form submission
+          const urlInput = document.querySelector('input[name="url"]');
+          const form = urlInput.closest('form');
+          
+          if (urlInput && form) {
+            urlInput.value = url;
+            htmx.trigger(form, 'submit');
+            
+            // Clear search
+            searchInput.value = '';
+            searchResults.classList.add('hidden');
+            
+            // Show feedback
+            console.log(`Added to queue: ${title}`);
+          }
+        });
+      });
+    }
+    
+    function hideSearchResults() {
+      searchResults.classList.add('hidden');
+    }
+    
+    function performSearch(query) {
+      if (!query || query.length < 2) {
+        hideSearchResults();
+        return;
+      }
+      
+      // Check cache first
+      if (searchCache.has(query)) {
+        showSearchResults(searchCache.get(query));
+        return;
+      }
+      
+      // Show loading state
+      searchResults.innerHTML = '<div class="p-4 text-center text-slate-400">Searching...</div>';
+      searchResults.classList.remove('hidden');
+      
+      fetch('/search', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ query: query })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.error) {
+          throw new Error(data.error);
+        }
+        
+        const results = data.results || [];
+        searchCache.set(query, results);
+        
+        // Only show results if the search input still matches our query
+        if (searchInput.value.trim() === query) {
+          showSearchResults(results);
+        }
+      })
+      .catch(error => {
+        console.error('Search error:', error);
+        if (searchInput.value.trim() === query) {
+          searchResults.innerHTML = '<div class="p-4 text-center text-slate-400">Search failed. Try again.</div>';
+          searchResults.classList.remove('hidden');
+        }
+      });
+    }
+    
+    const debouncedSearch = debounce(performSearch, 300);
+    
+    // Search input event listeners
+    searchInput.addEventListener('input', function() {
+      const query = this.value.trim();
+      debouncedSearch(query);
+    });
+    
+    searchInput.addEventListener('focus', function() {
+      const query = this.value.trim();
+      if (query.length >= 2) {
+        performSearch(query);
+      }
+    });
+    
+    searchInput.addEventListener('blur', function() {
+      // Delay hiding to allow clicking on results
+      setTimeout(hideSearchResults, 150);
+    });
+    
+    // Hide search results when clicking outside
+    document.addEventListener('click', function(e) {
+      if (!e.target.closest('#search-input') && !e.target.closest('#search-results')) {
+        hideSearchResults();
+      }
+    });
+    
+    // Clear cache periodically to prevent memory issues
+    setInterval(() => {
+      if (searchCache.size > 50) {
+        searchCache.clear();
+      }
+    }, 300000); // Clear every 5 minutes if cache gets too large
   </script>
 </body>
 </html> 

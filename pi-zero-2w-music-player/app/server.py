@@ -773,6 +773,36 @@ def get_autoplay_status():
     return jsonify({'enabled': autoplay_enabled})
 
 
+@app.post('/search')
+def search_music():
+    """Search for music on YouTube"""
+    try:
+        data = request.get_json()
+        if not data or 'query' not in data:
+            return jsonify({'error': 'Query required'}), 400
+        
+        query = data['query'].strip()
+        if len(query) < 2:
+            return jsonify({'results': []})
+        
+        app.logger.info(f"Searching for: {query}")
+        
+        # Make request to Cloud Function
+        resp = requests.post(CLOUD_FUNCTION_URL, json={'query': query}, timeout=10)
+        
+        if resp.status_code == 200:
+            search_data = resp.json()
+            app.logger.info(f"Search returned {len(search_data.get('results', []))} results")
+            return jsonify(search_data)
+        else:
+            app.logger.error(f"Cloud function search failed: {resp.status_code}")
+            return jsonify({'error': 'Search failed'}), 500
+            
+    except Exception as e:
+        app.logger.error(f"Search error: {e}")
+        return jsonify({'error': 'Search failed'}), 500
+
+
 @app.get('/debug-queue')
 def debug_queue():
     """Debug endpoint to see current queue state"""
